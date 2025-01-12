@@ -1,0 +1,73 @@
+version: "3.8"
+services:
+  spark:
+    image: spark-app:dev
+    container_name: spark-app
+    environment:
+      - SPARK_HOME=${SPARK_HOME:-/opt/spark}
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=${PYSPARK_DRIVER_PYTHON:-python}  # Default to python unless notebook is specified
+      - PYSPARK_DRIVER_PYTHON_OPTS=${PYSPARK_DRIVER_PYTHON_OPTS:-}  # Empty unless notebook is specified
+      - AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+      - AWS_REGION=${S3_REGION}
+      - AWS_S3_ENDPOINT=${S3_ENDPOINT}
+      - AWS_S3_BUCKET_PUB=${S3_BUCKET_PUB:-output}
+    volumes:
+      - ./data:/data  # Монтирование данных для доступа к ним из контейнера
+      - ./notebooks:/notebooks  # Монтирование папки с ноутбуками
+    ports:
+      - "8888:8888"  # Порт для Jupyter Notebook
+      - "4040:4040"  # Порт для UI Spark
+      - "7077:7077"  # Порт для Spark Standalone
+    #command: /bin/bash -c "jupyter-notebook ${PYSPARK_DRIVER_PYTHON_OPTS:-} --notebook-dir=/notebooks" # For develop app in notebook
+    command: /bin/bash -c "./bin/spark-submit --master local[*] app.py /data/crime.csv output/dir/"
+    depends_on:
+      - minio
+      - minio-mc
+    networks:
+      - spark_network
+
+  minio:
+    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: minio
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY_ID} # > 3 символов
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_ACCESS_KEY} # > 8 символов
+    ports:
+      - "9000:9000" # Протокол S3
+      - "9010:9010" # Web UI
+    volumes:
+      - ./minio-data:/data
+    restart: always
+    command: server /data --console-address ":9010"
+    healthcheck:
+      test: [ 'CMD', 'curl', 'http://localhost:9010/minio/health/live' ]
+      start_period: 10s
+      timeout: 5s
+      interval: 3s
+      retries: 5
+    networks:
+      - spark_network  
+
+  minio-mc:
+    container_name: minio-mc
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >  
+      /bin/sh -c "sleep 5;
+      /usr/bin/mc alias set spark-s3 ${S3_ENDPOINT} ${S3_ACCESS_KEY_ID} ${S3_SECRET_ACCESS_KEY};
+      /usr/bin/mc mb spark-s3/${S3_BUCKET_PUB};
+      /usr/bin/mc anonymous set public spark-s3/${S3_BUCKET_PUB};"
+    networks:
+      - spark_network   
+
+volumes:
+  data:
+  notebooks:
+  minio-data:
+
+networks:
+  spark_network:
+    driver: bridge

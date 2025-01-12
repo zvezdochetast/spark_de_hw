@@ -1,0 +1,6 @@
+numpy
+koalas
+s3fs
+boto3
+notebook
+findspark
